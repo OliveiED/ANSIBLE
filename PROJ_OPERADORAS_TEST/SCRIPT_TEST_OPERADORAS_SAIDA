@@ -1,0 +1,276 @@
+#!/bin/bash
+# test_ping_zabbix_parallel_full_all_dests.sh
+# ICMP + TCP em paralelo, envio para Zabbix
+# Evandro 2025-10-03
+
+BASE_DIR="/home/admin/my-setup-ansible/dash-servicos-operadoras/ping-results"
+mkdir -p "$BASE_DIR"
+ZABBIX_LOG="$BASE_DIR/zabbix_sender_results.txt"
+
+ZABBIX_SERVER="172.16.30.113"
+ZABBIX_HOST="MONITORAMENTO-SERVICOS-OPERADORAS"
+
+# Fontes: ip_friendlyname
+SOURCES=(
+  "177.105.240.154_fibraplus"
+  "177.105.240.155_linkbrasil"
+#  "177.105.240.156_flextel"
+#  "177.105.240.157_solucao"
+)
+
+# Destinos completos
+DESTS=(
+  "google.com" "youtube.com" "netflix.com" "amazon.com" "microsoft.com" "openai.com"
+  "cloudflare.com" "facebook.com" "twitter.com" "apple.com" "linkedin.com" "whatsapp.com"
+  "instagram.com" "tiktok.com" "gmail.com" "drive.google.com" "meet.google.com"
+  "outlook.com" "office.com" "teams.microsoft.com"
+  "bb.com.br" "caixa.gov.br" "itau.com.br" "bradesco.com.br" "santander.com.br"
+  "sicredi.com.br" "bancopan.com.br" "banrisul.com.br" "mercadopago.com.br" "nubank.com.br"
+  "pagseguro.com.br" "binance.com"
+  "gov.br" "receita.fazenda.gov.br" "servicos.efazenda.ms.gov.br" "web.detran.ms.gov.br"
+  "planalto.gov.br" "camara.leg.br" "senado.leg.br" "stf.jus.br" "stj.jus.br" "tse.jus.br"
+  "voip1.freewaynet.com.br" "skype.com" "zoom.us" "discord.com" "telegram.org"
+  "mercadolivre.com.br" "americanas.com.br" "magazineluiza.com.br" "shopee.com.br" "aliexpress.com"
+  "eagames.com" "epicgames.com" "steamcommunity.com" "steampowered.com" "playstation.com"
+  "xboxlive.com" "xbox.com" "valorant.com" "valorant.secure.dyn.riotcdn.net"
+  "br.login.leagueoflegends.com" "leagueoflegends.com" "fortnite.com" "csgo.com" "battle.net"
+  "rockstargames.com" "minecraft.net" "roblox.com"
+)
+
+# TCP portas
+TCP_PORTS=(443)
+
+# Configurações
+COUNT=5          # pacotes por teste
+MAX_PROCS=8      # concorrência máxima
+
+sanitize_key() {
+  echo "$1" | sed 's/[^A-Za-z0-9._-]/_/g'
+}
+
+# Verificar dependências
+for cmd in zabbix_sender nping ping; do
+  command -v "$cmd" >/dev/null 2>&1 || {
+    echo "ERRO: comando '$cmd' não encontrado. Instale com: apt-get install $cmd"
+    exit 1
+  }
+done
+
+# Inicializar arquivo de log do Zabbix
+echo "=== LOG ZABBIX SENDER - $(date) ===" > "$ZABBIX_LOG"
+echo "Server: $ZABBIX_SERVER" >> "$ZABBIX_LOG"
+echo "Host: $ZABBIX_HOST" >> "$ZABBIX_LOG"
+echo "======================================" >> "$ZABBIX_LOG"
+
+# Função para enviar métricas individualmente para Zabbix e logar resultado
+send_to_zabbix() {
+  local key="$1"
+  local value="$2"
+  local timestamp=$(date '+%F %T')
+
+  # Executa zabbix_sender e captura a saída completa
+  local result
+  result=$(zabbix_sender -z "$ZABBIX_SERVER" -s "$ZABBIX_HOST" -k "$key" -o "$value" 2>&1)
+
+  # Loga o comando executado e o resultado
+  {
+    echo "[$timestamp] Comando: zabbix_sender -z $ZABBIX_SERVER -s $ZABBIX_HOST -k $key -o $value"
+    echo "$result"
+    echo "---"
+  } >> "$ZABBIX_LOG"
+
+  # Exibe no console apenas resumo (opcional)
+  if echo "$result" | grep -q "processed: 1"; then
+    echo "✅ $timestamp - $key = $value (SUCESSO)"
+  else
+    echo "❌ $timestamp - $key = $value (FALHA)"
+    echo "   Detalhes: $result"
+  fi
+}
+
+# --- ICMP ---
+do_test_icmp() {
+  local SRC="$1" DST="$2"
+  local SRC_IP=${SRC%%_*}
+  local SRC_KEY DST_KEY FILE PING_OUTPUT STATUS LOSS LATENCIA JITTER RTT_LINE MIN AVG MAX MDEV
+
+  SRC_KEY=$(sanitize_key "$SRC")
+  DST_KEY=$(sanitize_key "$DST")
+  FILE="$BASE_DIR/${DST_KEY}_via_${SRC_KEY}.txt"
+
+  PING_OUTPUT=$(ping -4 -c "$COUNT" -I "$SRC_IP" "$DST" 2>&1)
+
+  STATUS=0 LOSS=100 LATENCIA=0 JITTER=0
+
+  if [[ $PING_OUTPUT =~ ([0-9]+)[[:space:]]packets\ transmitted,[[:space:]]([0-9]+)[[:space:]]received,[[:space:]]([0-9.]+)%\ packet\ loss ]]; then
+    local RECV=${BASH_REMATCH[2]}
+    LOSS=${BASH_REMATCH[3]}
+    [[ $RECV -gt 0 ]] && STATUS=1
+  fi
+
+  RTT_LINE=$(echo "$PING_OUTPUT" | grep -oP 'rtt min/avg/max/mdev = \K[0-9./]+' || true)
+  if [ -n "$RTT_LINE" ]; then
+    IFS='/' read -r MIN AVG MAX MDEV <<< "$RTT_LINE"
+    LATENCIA=$AVG
+    JITTER=$MDEV
+  fi
+
+  {
+    echo "TYPE=ICMP"
+    echo "STATUS=$STATUS"
+    echo "LOSS=$LOSS"
+    echo "LATENCIA=$LATENCIA"
+    echo "JITTER=$JITTER"
+    echo "RAW_OUTPUT_BEGIN"
+    echo "$PING_OUTPUT"
+    echo "RAW_OUTPUT_END"
+  } > "$FILE"
+
+  # Envia CADA métrica individualmente para o Zabbix
+  send_to_zabbix "dst_ping_status_${DST_KEY}_via_${SRC_KEY}" "$STATUS"
+  send_to_zabbix "dst_ping_loss_${DST_KEY}_via_${SRC_KEY}" "$LOSS"
+  send_to_zabbix "dst_ping_latencia_${DST_KEY}_via_${SRC_KEY}" "$LATENCIA"
+  send_to_zabbix "dst_ping_jitter_${DST_KEY}_via_${SRC_KEY}" "$JITTER"
+
+  echo "$(date '+%F %T') - ICMP: $SRC_IP -> $DST : status=$STATUS loss=${LOSS}% lat=${LATENCIA}ms jit=${JITTER}ms"
+}
+
+# --- TCP usando --tcp-connect (funciona com three-way handshake completo) ---
+do_test_tcp() {
+  local SRC="$1" DST="$2" PORT="$3"
+  local SRC_IP=${SRC%%_*}
+  local SRC_KEY DST_KEY FILE NOUT STATUS LOSS LATENCIA JITTER SENT RCVD LOST
+
+  SRC_KEY=$(sanitize_key "$SRC")
+  DST_KEY=$(sanitize_key "$DST")
+  FILE="$BASE_DIR/${DST_KEY}_tcp${PORT}_via_${SRC_KEY}.txt"
+
+  # Executa nping com --tcp-connect (three-way handshake completo)
+  NOUT=$(nping --tcp-connect -p "$PORT" --count "$COUNT" --source-ip "$SRC_IP" "$DST" 2>&1)
+
+  # Inicializa variáveis
+  STATUS=0 LOSS=100 LATENCIA=0 JITTER=0 SENT=0 RCVD=0 LOST=0
+
+  # Extrai estatísticas do summary - método mais robusto
+  if echo "$NOUT" | grep -q "TCP connection attempts:"; then
+    # Extrai usando grep com padrões específicos
+    SENT=$(echo "$NOUT" | grep -oP 'TCP connection attempts:\s*\K[0-9]+' || echo "0")
+    RCVD=$(echo "$NOUT" | grep -oP 'Successful connections:\s*\K[0-9]+' || echo "0")
+    LOST=$(echo "$NOUT" | grep -oP 'Failed:\s*\K[0-9]+' || echo "$SENT")
+
+    # Calcula percentual de perda
+    if [[ $SENT -gt 0 ]]; then
+      LOSS=$(awk -v s="$SENT" -v l="$LOST" 'BEGIN{printf "%.2f", (l/s*100)}')
+    fi
+
+    # Status baseado em conexões bem-sucedidas
+    [[ $RCVD -gt 0 ]] && STATUS=1
+  else
+    # Fallback: conta linhas SENT/RCVD
+    SENT=$(echo "$NOUT" | grep -c '^SENT')
+    RCVD=$(echo "$NOUT" | grep -c '^RCVD')
+    LOST=$((SENT - RCVD))
+    if [[ $SENT -gt 0 ]]; then
+      LOSS=$(awk -v s="$SENT" -v l="$LOST" 'BEGIN{printf "%.2f", (l/s*100)}')
+    fi
+    [[ $RCVD -gt 0 ]] && STATUS=1
+  fi
+
+  # Extrai latência
+  LATENCIA=$(echo "$NOUT" | grep -oP 'Avg rtt:[[:space:]]*\K[0-9.]+' || echo "0")
+
+  # Calcula jitter (diferença entre Max e Min RTT)
+  local MIN_RTT MAX_RTT
+  MIN_RTT=$(echo "$NOUT" | grep -oP 'Min rtt:[[:space:]]*\K[0-9.]+' || echo "0")
+  MAX_RTT=$(echo "$NOUT" | grep -oP 'Max rtt:[[:space:]]*\K[0-9.]+' || echo "0")
+  if [[ "$MIN_RTT" != "0" && "$MAX_RTT" != "0" ]]; then
+    JITTER=$(awk -v min="$MIN_RTT" -v max="$MAX_RTT" 'BEGIN{printf "%.3f", (max - min)}')
+  fi
+
+  # Three-way handshake sempre é completo com --tcp-connect quando há RCVD > 0
+  local HANDSHAKE_STATUS=0
+  [[ $RCVD -gt 0 ]] && HANDSHAKE_STATUS=1
+
+  {
+    echo "TYPE=TCP_CONNECT"
+    echo "PORT=$PORT"
+    echo "STATUS=$STATUS"
+    echo "SENT=$SENT"
+    echo "RCVD=$RCVD"
+    echo "LOST=$LOST"
+    echo "LOSS=$LOSS"
+    echo "LATENCIA=$LATENCIA"
+    echo "JITTER=$JITTER"
+    echo "HANDSHAKE=$HANDSHAKE_STATUS"
+    echo "RAW_OUTPUT_BEGIN"
+    echo "$NOUT"
+    echo "RAW_OUTPUT_END"
+  } > "$FILE"
+
+  # Envia CADA métrica individualmente para o Zabbix
+  send_to_zabbix "tcp_connect_status_${DST_KEY}_p${PORT}_via_${SRC_KEY}" "$STATUS"
+  send_to_zabbix "tcp_connect_sent_${DST_KEY}_p${PORT}_via_${SRC_KEY}" "$SENT"
+  send_to_zabbix "tcp_connect_rcvd_${DST_KEY}_p${PORT}_via_${SRC_KEY}" "$RCVD"
+  send_to_zabbix "tcp_connect_loss_${DST_KEY}_p${PORT}_via_${SRC_KEY}" "$LOSS"
+  send_to_zabbix "tcp_connect_latencia_${DST_KEY}_p${PORT}_via_${SRC_KEY}" "$LATENCIA"
+  send_to_zabbix "tcp_connect_jitter_${DST_KEY}_p${PORT}_via_${SRC_KEY}" "$JITTER"
+  send_to_zabbix "tcp_connect_handshake_${DST_KEY}_p${PORT}_via_${SRC_KEY}" "$HANDSHAKE_STATUS"
+
+  echo "$(date '+%F %T') - TCP: $SRC_IP -> $DST:$PORT : status=$STATUS conns=$RCVD/$SENT loss=${LOSS}% lat=${LATENCIA}ms jit=${JITTER}ms handshake=$HANDSHAKE_STATUS"
+}
+
+# --- MAIN LOOP com controle de processos ---
+main() {
+  echo "Iniciando testes de conectividade em $(date)"
+  echo "=============================================="
+  echo "Log do Zabbix será salvo em: $ZABBIX_LOG"
+  echo
+
+  for SRC in "${SOURCES[@]}"; do
+    local SRC_IP=${SRC%%_*}
+    echo "Testando a partir de $SRC ($SRC_IP)..."
+
+    for DST in "${DESTS[@]}"; do
+      # Teste ICMP
+      do_test_icmp "$SRC" "$DST" &
+
+      # Testes TCP
+      for P in "${TCP_PORTS[@]}"; do
+        do_test_tcp "$SRC" "$DST" "$P" &
+      done
+
+      # Limita concorrência
+      while [ "$(jobs -rp | wc -l)" -ge "$MAX_PROCS" ]; do
+        sleep 0.2
+      done
+    done
+  done
+
+  wait
+
+  # Resumo final
+  echo "=============================================="
+  echo "Todos os testes ICMP e TCP concluídos em $(date)"
+  echo
+  echo "=== RESUMO ZABBIX SENDER ==="
+  echo "Arquivo de log completo: $ZABBIX_LOG"
+
+  # Estatísticas do log
+  if [ -f "$ZABBIX_LOG" ]; then
+    local total_commands=$(grep -c "Comando:" "$ZABBIX_LOG")
+    local success_commands=$(grep -c "processed: 1" "$ZABBIX_LOG")
+    local failed_commands=$((total_commands - success_commands))
+
+    echo "Total de comandos enviados: $total_commands"
+    echo "Comandos bem-sucedidos: $success_commands"
+    echo "Comandos com falha: $failed_commands"
+
+    # Mostra últimas 5 linhas do log como exemplo
+    echo
+    echo "Últimas entradas do log:"
+    tail -10 "$ZABBIX_LOG"
+  fi
+}
+
+# Executa a função main
+main
