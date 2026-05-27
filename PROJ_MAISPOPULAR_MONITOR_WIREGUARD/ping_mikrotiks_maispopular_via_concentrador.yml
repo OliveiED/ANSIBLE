@@ -1,0 +1,202 @@
+---
+- name: Execute ping from MikroTik hosts
+  hosts: mikrotiks
+  gather_facts: no
+  vars:
+    ansible_ssh_pass: "Suasenhaaqui"  # Substitua pela senha correta, utilize usuário de show
+  tasks:
+    - name: Ensure host-specific directory exists on local machine
+      delegate_to: localhost
+      file:
+        path: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}"
+        state: directory
+        mode: '0755'
+############## PARTE DE REALIZAR OS PINGs #######################
+    - name: Ping IP 172.16.101.5
+      delegate_to: localhost
+      local_action:
+        module: command
+        cmd: |
+          sshpass -p "{{ ansible_ssh_pass }}" ssh -o StrictHostKeyChecking=no {{ ansible_user }}@{{ ansible_host }} "/ping  172.16.101.5 count=5"
+      register: ping_172_16_101_5_output
+      ignore_errors: yes
+
+    - name: Ping IP 10.10.8.1
+      delegate_to: localhost
+      local_action:
+        module: command
+        cmd: |
+          sshpass -p "{{ ansible_ssh_pass }}" ssh -o StrictHostKeyChecking=no {{ ansible_user }}@{{ ansible_host }} "/ping  10.10.8.1 count=5"
+      register: ping_10_10_8_1_output
+      ignore_errors: yes
+
+    - name: Ping IP 172.16.101.23
+      delegate_to: localhost
+      local_action:
+        module: command
+        cmd: |
+          sshpass -p "{{ ansible_ssh_pass }}" ssh -o StrictHostKeyChecking=no {{ ansible_user }}@{{ ansible_host }} "/ping  172.16.101.23 count=5"
+      register: ping_172_16_101_23_output
+      ignore_errors: yes
+
+    - name: Ping IP 172.16.101.101
+      delegate_to: localhost
+      local_action:
+        module: command
+        cmd: |
+          sshpass -p "{{ ansible_ssh_pass }}" ssh -o StrictHostKeyChecking=no {{ ansible_user }}@{{ ansible_host }} "/ping  172.16.101.101 count=5"
+      register: ping_172_16_101_101_output
+      ignore_errors: yes
+
+############## PARTE DE SALVAR RESULTADOS #######################
+
+############## FILIAL 05
+    - name: Save ping result for 172.16.101.5 on local machine
+      delegate_to: localhost
+
+      copy:
+        content: "{{ ping_172_16_101_5_output.stdout }}"
+        dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/ping_172.16.101.5.txt"
+      when: ping_172_16_101_5_output is defined
+
+    - name: Save ping result for 10.10.8.1 on local machine
+      delegate_to: localhost
+      copy:
+        content: "{{ ping_10_10_8_1_output.stdout }}"
+        dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/ping_10.10.8.1.txt"
+      when: ping_10_10_8_1_output is defined
+
+############# FILIAL 23
+    - name: Save ping result for 172.16.101.23 on local machine
+      delegate_to: localhost
+      copy:
+        content: "{{ ping_172_16_101_23_output.stdout }}"
+        dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/ping_172.16.101.23.txt"
+      when: ping_172_16_101_23_output is defined
+
+############# FILIAL 01
+    - name: Save ping result for 172.16.101.101 on local machine
+      delegate_to: localhost
+      copy:
+        content: "{{ ping_172_16_101_101_output.stdout }}"
+        dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/ping_172.16.101.101.txt"
+      when: ping_172_16_101_101_output is defined
+
+
+############## PARTE DE EXTRACAO DOS DADOS ####################### FILIAL 05
+    - name: Extract and save ping results for 172.16.101.5
+      delegate_to: localhost
+      block:
+        - name: Save sent packets
+          copy:
+            content: "{{ ping_172_16_101_5_output.stdout | regex_search('sent=([0-9]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_sent_172.16.101.5.txt"
+
+        - name: Save received packets
+          copy:
+            content: "{{ ping_172_16_101_5_output.stdout | regex_search('received=([0-9]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_received_172.16.101.5.txt"
+
+        - name: Save packet loss
+          copy:
+            content: "{{ ping_172_16_101_5_output.stdout | regex_search('packet-loss=([0-9]+%)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_packet-loss_172.16.101.5.txt"
+
+        - name: Save minimum RTT
+          copy:
+            content: "{{ ping_172_16_101_5_output.stdout | regex_search('min-rtt=([0-9ms]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_min-rtt_172.16.101.5.txt"
+
+        - name: Save average RTT
+          copy:
+            content: "{{ ping_172_16_101_5_output.stdout | regex_search('avg-rtt=([0-9ms]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_avg-rtt_172.16.101.5.txt"
+
+############## PARTE DE EXTRACAO DOS DADOS ####################### FILIAL 08
+    - name: Extract and save ping results for 10.10.8.1
+      delegate_to: localhost
+      block:
+        - name: Save sent packets
+          copy:
+            content: "{{ ping_10_10_8_1_output.stdout | regex_search('sent=([0-9]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_sent_10.10.8.1.txt"
+
+        - name: Save received packets
+          copy:
+            content: "{{ ping_10_10_8_1_output.stdout | regex_search('received=([0-9]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_received_10.10.8.1.txt"
+
+        - name: Save packet loss
+          copy:
+            content: "{{ ping_10_10_8_1_output.stdout | regex_search('packet-loss=([0-9]+%)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_packet-loss_10.10.8.1.txt"
+
+        - name: Save minimum RTT
+          copy:
+            content: "{{ ping_10_10_8_1_output.stdout | regex_search('min-rtt=([0-9ms]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_min-rtt_10.10.8.1.txt"
+
+        - name: Save average RTT
+          copy:
+            content: "{{ ping_10_10_8_1_output.stdout | regex_search('avg-rtt=([0-9ms]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_avg-rtt_10.10.8.1.txt"
+
+
+############## PARTE DE EXTRACAO DOS DADOS ####################### FILIAL 23
+    - name: Extract and save ping results for 172.16.101.23
+      delegate_to: localhost
+      block:
+        - name: Save sent packets
+          copy:
+            content: "{{ ping_172_16_101_23_output.stdout | regex_search('sent=([0-9]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_sent_172.16.101.23.txt"
+
+        - name: Save received packets
+          copy:
+            content: "{{ ping_172_16_101_23_output.stdout | regex_search('received=([0-9]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_received_172.16.101.23.txt"
+
+        - name: Save packet loss
+          copy:
+            content: "{{ ping_172_16_101_23_output.stdout | regex_search('packet-loss=([0-9]+%)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_packet-loss_172.16.101.23.txt"
+
+        - name: Save minimum RTT
+          copy:
+            content: "{{ ping_172_16_101_23_output.stdout | regex_search('min-rtt=([0-9ms]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_min-rtt_172.16.101.23.txt"
+
+        - name: Save average RTT
+          copy:
+            content: "{{ ping_172_16_101_23_output.stdout | regex_search('avg-rtt=([0-9ms]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_avg-rtt_172.16.101.23.txt"
+
+############## PARTE DE EXTRACAO DOS DADOS ####################### FILIAL 01
+    - name: Extract and save ping results for 172.16.101.101
+      delegate_to: localhost
+      block:
+        - name: Save sent packets
+          copy:
+            content: "{{ ping_172_16_101_101_output.stdout | regex_search('sent=([0-9]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_sent_172.16.101.101.txt"
+
+        - name: Save received packets
+          copy:
+            content: "{{ ping_172_16_101_101_output.stdout | regex_search('received=([0-9]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_received_172.16.101.101.txt"
+
+        - name: Save packet loss
+          copy:
+            content: "{{ ping_172_16_101_101_output.stdout | regex_search('packet-loss=([0-9]+%)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_packet-loss_172.16.101.101.txt"
+
+        - name: Save minimum RTT
+          copy:
+            content: "{{ ping_172_16_101_101_output.stdout | regex_search('min-rtt=([0-9ms]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_min-rtt_172.16.101.101.txt"
+
+        - name: Save average RTT
+          copy:
+            content: "{{ ping_172_16_101_101_output.stdout | regex_search('avg-rtt=([0-9ms]+)', '\\1') }}"
+            dest: "/home/admin/my-setup-ansible/ping_results/{{ ansible_host }}/result_avg-rtt_172.16.101.101.txt"
+
