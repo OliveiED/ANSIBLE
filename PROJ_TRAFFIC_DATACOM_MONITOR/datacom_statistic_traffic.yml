@@ -1,0 +1,110 @@
+---
+- name: Coletar estatísticas do Datacom via SSH
+  hosts: datacom
+  gather_facts: no
+  vars:
+    output_dir: "/home/admin/my-setup-ansible/traffic_total_datacom"
+
+    # Mapeamento de comandos por IP
+    host_commands:
+      "172.18.254.2":
+        - "show interface lag 9 statistics"
+        - "show interface hundred-gigabit-ethernet 1/1/4 statistics"
+      "172.18.254.52":
+        - "show interface lag 1 statistics"
+#      "192.168.0.26":
+#        - "show interface ten-gigabit-ethernet 1/1/2 statistics"
+#      "192.168.0.27":
+#        - "show interface ten-gigabit-ethernet 1/1/2 statistics"
+
+  tasks:
+    - name: Criar diretório de saída se não existir
+      file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: '0755'
+      delegate_to: localhost
+      run_once: true
+
+    - name: Executar comandos específicos no Datacom
+      ansible.builtin.shell: |
+        sshpass -p "{{ ansible_ssh_pass }}" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 {{ ansible_user }}@{{ inventory_hostname }} "{{ item }}"
+      register: cmd_output
+      delegate_to: localhost
+      loop: "{{ host_commands[inventory_hostname] }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Extrair número da interface do comando
+      set_fact:
+        interface_numbers: "{{ host_commands[inventory_hostname] | map('regex_findall', '(lag|ethernet)\\s+(\\d+(?:/\\d+/\\d+)?)') | map('first') | map('last') | list }}"
+      delegate_to: localhost
+
+    - name: Processar resultados dos comandos
+      block:
+        - name: Extrair In Octets do primeiro comando
+          set_fact:
+            in_octets_lag: "{{ cmd_output.results[0].stdout | regex_findall('In Octets\\s+:\\s+(\\d+)') | first }}"
+          when: cmd_output.results[0] is defined
+
+        - name: Extrair Out Octets do primeiro comando
+          set_fact:
+            out_octets_lag: "{{ cmd_output.results[0].stdout | regex_findall('Out Octets\\s+:\\s+(\\d+)') | first }}"
+          when: cmd_output.results[0] is defined
+
+        - name: Extrair In Octets do segundo comando (se existir)
+          set_fact:
+            in_octets_ethernet: "{{ cmd_output.results[1].stdout | regex_findall('In Octets\\s+:\\s+(\\d+)') | first }}"
+          when: cmd_output.results[1] is defined
+
+        - name: Extrair Out Octets do segundo comando (se existir)
+          set_fact:
+            out_octets_ethernet: "{{ cmd_output.results[1].stdout | regex_findall('Out Octets\\s+:\\s+(\\d+)') | first }}"
+          when: cmd_output.results[1] is defined
+
+    - name: Definir nomes dos arquivos
+      set_fact:
+        lag_filename: "lag{{ interface_numbers[0] | replace('/', '') }}"
+        ethernet_filename: "ethernet{{ interface_numbers[1] | replace('/', '') if interface_numbers[1] is defined else '' }}"
+      delegate_to: localhost
+      when: interface_numbers[0] is defined
+
+    - name: Salvar estatísticas LAG em arquivo
+      copy:
+        content: "{{ in_octets_lag }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}_{{ lag_filename }}_in.txt"
+      delegate_to: localhost
+      when: in_octets_lag is defined and lag_filename is defined
+
+    - name: Salvar estatísticas LAG out em arquivo
+      copy:
+        content: "{{ out_octets_lag }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}_{{ lag_filename }}_out.txt"
+      delegate_to: localhost
+      when: out_octets_lag is defined and lag_filename is defined
+
+    - name: Salvar estatísticas Ethernet em arquivo
+      copy:
+        content: "{{ in_octets_ethernet }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}_{{ ethernet_filename }}_in.txt"
+      delegate_to: localhost
+      when: in_octets_ethernet is defined and ethernet_filename is defined
+
+    - name: Salvar estatísticas Ethernet out em arquivo
+      copy:
+        content: "{{ out_octets_ethernet }}"
+        dest: "{{ output_dir }}/{{ inventory_hostname }}_{{ ethernet_filename }}_out.txt"
+      delegate_to: localhost
+      when: out_octets_ethernet is defined and ethernet_filename is defined
+
+    - name: Mostrar estatísticas coletadas
+      debug:
+        msg:
+          - "Host: {{ inventory_hostname }}"
+          - "Números das interfaces: {{ interface_numbers }}"
+          - "Arquivo LAG: {{ lag_filename | default('N/A') }}"
+          - "Arquivo Ethernet: {{ ethernet_filename | default('N/A') }}"
+          - "LAG - In Octets: {{ in_octets_lag | default('N/A') }}"
+          - "LAG - Out Octets: {{ out_octets_lag | default('N/A') }}"
+          - "Ethernet - In Octets: {{ in_octets_ethernet | default('N/A') }}"
+          - "Ethernet - Out Octets: {{ out_octets_ethernet | default('N/A') }}"
